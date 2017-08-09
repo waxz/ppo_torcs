@@ -38,7 +38,8 @@ class AgentTorcs(AgentBase):
         super(AgentTorcs, self)._init()
 
     def _set_track(self):
-        track_list=['alpine-2' , 'e-track-1',  'e-track-3' , 'e-track-6' , 'g-track-1' , 'g-track-3' ,  'ruudskogen' , 'street-1' , 'wheel-2',\
+        track_list=['g-track-1' ]
+        a=['alpine-2' , 'e-track-1',  'e-track-3' , 'e-track-6' , 'g-track-1' , 'g-track-3' ,  'ruudskogen' , 'street-1' , 'wheel-2',\
                      'alpine-1' , 'eroad'  ,   'e-track-2' , 'e-track-4'  ,'forza' ,     'g-track-2' , 'ole-road-1' , 'spring'   ,   'wheel-1']
 
         if self.track_name is '':
@@ -138,13 +139,23 @@ class AgentTorcs(AgentBase):
             speed_coff = np.log10(speed)
         # _reward = speed_coff * (border - min(border, abs(ob.trackPos)))
         _reward = 1. / (1 + np.exp(-(-np.abs(ob.trackPos) + 1) * 8)) - 0.1
-        reward = _reward + (ob.speedX * 300.) / 300.
+        reward = _reward + (ob.speedX * 50.) / 300.
         steeringLoss = action[0] * ob.trackPos * (0.1 + 0.1 * speed_coff)
         logger.info("steering loss = {:.04f}, steering={:.4f}, trackPos={:.4f}".format(steeringLoss, action[0], ob.trackPos))
         reward -= steeringLoss
 
         # if self._episodeSteps <= 30 and ob.damage > 0.:
         #     is_over = True
+        if ob.damage > 0.:
+            reward =-1
+        if ob.damage > 2.:
+            reward =-2
+        if ob.damage >10:
+            reward =-10.
+        if ob.damage >50:
+            reward =-10.
+            is_over = True
+
         if self._speedMax < ob.speedX: self._speedMax = ob.speedX
         # if self._speedMax >= (50 / 300.) and ob.speedX <= (15. / 300.):  #
         #     if reward > 0: reward *= abs(ob.speedX / self._speedMax)
@@ -165,8 +176,8 @@ class AgentTorcs(AgentBase):
         if trackLoss < -1e-4 or trackPosLoss < -1e-4:
             # 不奖励离开车道的行为
             # reward  = -0.1
-            if self._speedMax < (60./300.):
-                reward = -1.
+            if self._speedMax < (20./300.):
+                reward =-1.
                 is_over = True
         #     if reward >= 0.: reward *= 0.5
         #     if trackLoss < 0:

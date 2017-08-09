@@ -22,17 +22,17 @@ else:
 
 GAMMA = 0.99
 LOCAL_TIME_MAX = 5
-STEPS_PER_EPOCH = 500
+STEPS_PER_EPOCH = 256
 EVAL_EPISODE = 0
-BATCH_SIZE = 32
+BATCH_SIZE = 64
 PREDICT_BATCH_SIZE = 32     # batch for efficient forward
-SIMULATOR_PROC = 6      #改成了cpu的个数
+SIMULATOR_PROC = 5      #改成了cpu的个数
 PREDICTOR_THREAD_PER_GPU = 2
 PREDICTOR_THREAD = None
 INIT_LEARNING_RATE_A = 1e-4
-INIT_LEARNING_RATE_C = 1e-4
+INIT_LEARNING_RATE_C = 2e-4
 # EVALUATE_PROC = min(multiprocessing.cpu_count() // 2, 20)
-
+CLIP_PARAMETER=0.2
 NUM_ACTIONS = None
 
 from autodrive.agent.torcs import AgentTorcs
@@ -100,24 +100,29 @@ class Model(ModelDesc):
             # l = tf.layers.dense(l, 512, activation=tf.nn.relu, name='fc-dense')
             # for lidx, hidden_size in enumerate([300, 600]):
             #     l = tf.layers.dense(l, hidden_size, activation=tf.nn.relu, name='fc-%d'%lidx)
-            value = tf.layers.dense(l, 1, name='fc-value')
+            value = tf.layers.dense(l, 1, name='fc-value',\
+            kernel_initializer=tf.truncated_normal_initializer(stddev=0.1))
             if not hasattr(self, '_weights_critic'):
                 self._weights_critic = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=vs.name)
 
         with tf.variable_scope('actor') as vs:
             l = tf.stop_gradient(l)
-            mu_steering = 0.5 * tf.layers.dense(l, 1, activation=tf.nn.tanh, name='fc-mu-steering')
-            mu_accel = tf.layers.dense(l, 1, activation=tf.nn.tanh, name='fc-mu-accel')
+            mu_steering = 0.5 * tf.layers.dense(l, 1, activation=tf.nn.tanh, name='fc-mu-steering',\
+            kernel_initializer=tf.truncated_normal_initializer(stddev=0.01))
+            mu_accel = tf.layers.dense(l, 1, activation=tf.nn.tanh, name='fc-mu-accel',\
+            kernel_initializer=tf.truncated_normal_initializer(stddev=0.01))
             mus = tf.concat([mu_steering, mu_accel], axis=-1)
             # mus = tf.layers.dense(l, 2, activation=tf.nn.tanh, name='fc-mus')
             # sigmas = tf.layers.dense(l, 2, activation=tf.nn.softplus, name='fc-sigmas')
             # sigmas = tf.clip_by_value(sigmas, -0.001, 0.5)
-            sigma_steering_ = 0.5 * tf.layers.dense(l, 1, activation=tf.nn.sigmoid, name='fc-sigma-steering')
-            sigma_accel_ = 1. * tf.layers.dense(l, 1, activation=tf.nn.sigmoid, name='fc-sigma-accel')
+            sigma_steering_ = 0.5 * tf.layers.dense(l, 1, activation=tf.nn.sigmoid, name='fc-sigma-steering',\
+            kernel_initializer=tf.truncated_normal_initializer(stddev=0.01))
+            sigma_accel_ = 1. * tf.layers.dense(l, 1, activation=tf.nn.sigmoid, name='fc-sigma-accel',\
+            kernel_initializer=tf.truncated_normal_initializer(stddev=0.01))
             # sigma_beta_steering = symbolic_functions.get_scalar_var('sigma_beta_steering', 0.3, summary=True, trainable=False)
             # sigma_beta_accel = symbolic_functions.get_scalar_var('sigma_beta_accel', 0.3, summary=True, trainable=False)
             from tensorpack.tfutils.common import get_global_step_var
-            sigma_beta_steering_exp = tf.train.exponential_decay(0.3, get_global_step_var(), 1000, 0.5, name='sigma/beta/steering/exp')
+            sigma_beta_steering_exp = tf.train.exponential_decay(0.001, get_global_step_var(), 1000, 0.5, name='sigma/beta/steering/exp')
             sigma_beta_accel_exp = tf.train.exponential_decay(0.5, get_global_step_var(), 5000, 0.5, name='sigma/beta/accel/exp')
             # sigma_steering = tf.minimum(sigma_steering_ + sigma_beta_steering, 0.5)
             # sigma_accel = tf.minimum(sigma_accel_ + sigma_beta_accel, 0.2)
@@ -196,7 +201,7 @@ class Model(ModelDesc):
                 self._weights_pred = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=vs.name)
                 assert (len(self._weights_train) == len(self._weights_pred))
                 assert (not hasattr(self, '_sync_op'))
-                self._sync_op = tf.group(*[d.assign(s + tf.random_normal(tf.shape(s), stddev=0.05)) for d, s in zip(self._weights_pred, self._weights_train)])
+                self._sync_op = tf.group(*[d.assign(s + tf.truncated_normal(tf.shape(s), stddev=0.02)) for d, s in zip(self._weights_pred, self._weights_train)])
 
         with tf.variable_scope('pre') as vs:
             pre_p,pre_v,pre_dists=self._get_NN_prediction(state)
@@ -216,7 +221,7 @@ class Model(ModelDesc):
         pre_probs=pre_dists.log_prob(action)
         ratio=tf.exp(log_probs-pre_probs)
         prob_ratio = tf.reduce_mean(input_tensor=tf.concat(values=ratio, axis=1), axis=1)
-        clip_param=tf.train.exponential_decay(0.1, get_global_step_var(), 10000, 0.98, name='clip_param')
+        clip_param=tf.train.exponential_decay(CLIP_PARAMETER, get_global_step_var(), 10000, 0.98, name='clip_param')
 
 
         # surr1=prob_ratio*advantage
@@ -304,9 +309,9 @@ class Model(ModelDesc):
     def _calc_learning_rate(self, name, epoch, lr):
         def _calc():
             lr_init = INIT_LEARNING_RATE_A if name == 'actor' else INIT_LEARNING_RATE_C
-            lrs = [(0, lr_init * 0.25),
-                   (1, lr_init * 0.5),
-                   (2, lr_init * 1.0),
+            lrs = [(0, lr_init * 0.20),
+                   (1, lr_init * 0.25),
+                   (2, lr_init * 0.68),
                    (3, lr_init * 0.5),
                    (4, lr_init * 0.25),
                    (5, lr_init * 0.128),
@@ -470,19 +475,20 @@ def get_config():
     dataflow = BatchData(DataFromQueue(master.queue), BATCH_SIZE)
 
     class CBSyncWeight(Callback):
+
+
+
+        def _after_run(self,ctx,_):
+            if self.local_step > 1 and self.local_step % SIMULATOR_PROC ==0:
+                # print("before step ",self.local_step)
+                return [M._td_sync_op]
+
         def _before_run(self, ctx):
+
             if self.local_step % 10 == 0:
-                return [M._sync_op]
-
-    class CBTDSyncWeight(Callback):
-    
-
-        def _before_train(self):
-            
-            return [M._td_sync_op]
-        def _before_run(self,ctx):
-            # print("before step ",self.local_step)
-            return [M._td_sync_op]
+                return [M._sync_op,M._td_sync_op]
+            if self.local_step % SIMULATOR_PROC ==0 and 0:
+                return [M._td_sync_op]
 
     import functools
     return TrainConfig(
@@ -506,7 +512,7 @@ def get_config():
             master,
             StartProcOrThread(master),
             CBSyncWeight(),
-            CBTDSyncWeight()
+            # CBTDSyncWeight()
             # PeriodicTrigger(Evaluator(
             #     EVAL_EPISODE, ['state'], ['policy'], get_player),
             #     every_k_epochs=3),
@@ -548,6 +554,7 @@ Options:
         if args['--fake_agent']:
             clsAgent = AgentFake
         # os.system('killall -9 torcs-bin')
+        summary_writer=tf.summary.FileWriter('/tmp/torcs_log')
 
         dirname = '/tmp/torcs/trainlog'
         from tensorpack.utils import logger
